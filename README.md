@@ -1,4 +1,7 @@
-# ⚡ TurboStorm-Load: Distributed Synthetic Traffic Generator & Stress Orchestrator
+# TurboStorm Load | Distributed HTTP, gRPC and WebSocket Load Testing Tool
+
+TurboStorm Load is a distributed synthetic traffic generator and load-testing orchestrator written in Go. It is designed to generate configurable HTTP, gRPC, and WebSocket workloads, coordinate multiple workers, and help developers evaluate service behavior under controlled traffic. Use it against systems you own or are authorized to test, and report benchmark results with the environment and workload settings.
+
 
 <p align="center">
   <img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,24,45&height=220&section=header&text=TurboStorm%20Load&fontSize=68&fontAlignY=38&desc=Ultra-High-Throughput%20Distributed%20Traffic%20Generator%20%7C%20HTTP/gRPC/WebSocket%20%7C%20HDR%20Histogram&descAlignY=58&descAlign=50" width="100%"/>
