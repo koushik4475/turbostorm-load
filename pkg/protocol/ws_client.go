@@ -72,7 +72,10 @@ func (c *WSClient) connect() error {
 	}
 
 	nonce := make([]byte, 16)
-	_, _ = rand.Read(nonce)
+	if _, err := rand.Read(nonce); err != nil {
+		_ = rawConn.Close()
+		return fmt.Errorf("generate websocket handshake nonce: %w", err)
+	}
 	c.secKey = base64.StdEncoding.EncodeToString(nonce)
 
 	path := u.RequestURI()
@@ -104,23 +107,42 @@ func (c *WSClient) connect() error {
 		_ = rawConn.Close()
 		return err
 	}
-
-	if !strings.Contains(statusLine, "101") {
+	if err := validateHandshakeResponse(statusLine, reader, c.secKey); err != nil {
 		_ = rawConn.Close()
-		return fmt.Errorf("websocket handshake failed: %s", strings.TrimSpace(statusLine))
-	}
-
-	// Drain handshake headers
-	for {
-		line, err := reader.ReadString('\n')
-		if err != nil || line == "\r\n" || line == "\n" {
-			break
-		}
+		return err
 	}
 
 	_ = rawConn.SetDeadline(time.Time{})
 	c.conn = rawConn
 	c.reader = reader
+	return nil
+}
+
+// validateHandshakeResponse verifies the HTTP upgrade status and RFC 6455 accept key.
+func validateHandshakeResponse(statusLine string, reader *bufio.Reader, key string) error {
+	fields := strings.Fields(statusLine)
+	if len(fields) < 2 || fields[1] != "101" {
+		return fmt.Errorf("websocket handshake failed: %s", strings.TrimSpace(statusLine))
+	}
+
+	accept := ""
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("read websocket handshake headers: %w", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(name), "Sec-WebSocket-Accept") {
+			accept = strings.TrimSpace(value)
+		}
+	}
+
+	if accept != computeWSKeyAccept(key) {
+		return fmt.Errorf("websocket handshake failed: invalid Sec-WebSocket-Accept header")
+	}
 	return nil
 }
 
@@ -148,7 +170,10 @@ func (c *WSClient) Execute(ctx context.Context) Result {
 		payload = []byte("turbostorm-ping")
 	}
 
-	frame := encodeWSFrame(0x1, payload) // 0x1 text frame with client mask
+	frame, err := encodeWSFrame(0x1, payload) // 0x1 text frame with a fresh client mask
+	if err != nil {
+		return Result{Timestamp: time.Now(), Err: fmt.Errorf("encode websocket frame: %w", err)}
+	}
 	start := time.Now()
 
 	c.mu.Lock()
@@ -212,12 +237,15 @@ func (c *WSClient) Execute(ctx context.Context) Result {
 	}
 }
 
-func encodeWSFrame(opcode byte, payload []byte) []byte {
+func encodeWSFrame(opcode byte, payload []byte) ([]byte, error) {
 	length := len(payload)
 	var header []byte
 	header = append(header, 0x80|opcode) // FIN bit + opcode
 
-	mask := []byte{0x12, 0x34, 0x56, 0x78} // Synthetic client mask key
+	mask := make([]byte, 4)
+	if _, err := rand.Read(mask); err != nil {
+		return nil, fmt.Errorf("generate websocket frame mask: %w", err)
+	}
 
 	if length <= 125 {
 		header = append(header, 0x80|byte(length))
@@ -234,7 +262,7 @@ func encodeWSFrame(opcode byte, payload []byte) []byte {
 		masked[i] = payload[i] ^ mask[i%4]
 	}
 
-	return append(header, masked...)
+	return append(header, masked...), nil
 }
 
 func (c *WSClient) resetConn() {
@@ -254,12 +282,17 @@ func (c *WSClient) Close() error {
 	c.closing = true
 	if c.conn != nil {
 		// send close frame (0x8)
-		closeFrame := encodeWSFrame(0x8, []byte{})
-		_ = c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-		_, _ = c.conn.Write(closeFrame)
+		closeFrame, frameErr := encodeWSFrame(0x8, []byte{})
+		if frameErr == nil {
+			_ = c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _ = c.conn.Write(closeFrame)
+		}
 		err := c.conn.Close()
 		c.conn = nil
 		c.reader = nil
+		if frameErr != nil {
+			return frameErr
+		}
 		return err
 	}
 	return nil
