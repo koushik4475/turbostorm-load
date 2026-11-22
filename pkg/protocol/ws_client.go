@@ -288,11 +288,11 @@ func (c *WSClient) Close() error {
 			_, _ = c.conn.Write(closeFrame)
 		}
 		err := c.conn.Close()
+		c.conn = nil
+		c.reader = nil
 		if frameErr != nil {
 			return frameErr
 		}
-		c.conn = nil
-		c.reader = nil
 		return err
 	}
 	return nil
